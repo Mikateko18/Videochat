@@ -35,7 +35,7 @@ public class TestHome2 : MonoBehaviour
     // Get your own App ID at https://dashboard.agora.io/
     [Header("Agora Properties")]
     [SerializeField]
-    private string AppID = "your_appid";
+    private string AppID = "0e5e6320392149fdb427f574a0b2aba7";
 
     [Header("UI Controls")]
     [SerializeField]
@@ -65,6 +65,37 @@ public class TestHome2 : MonoBehaviour
         CheckAppId();
         LoadLastChannel();
         ShowVersion();
+
+        if (_initialized)
+        {
+            // Find the previewImage object within the canvas
+            GameObject canvasObject = GameObject.Find("Canvas"); // Replace "Canvas" with your canvas name
+            if (canvasObject != null)
+            {
+                RawImage previewImage = canvasObject.GetComponentInChildren<RawImage>();
+                if (previewImage != null)
+                {
+                    Button previewButton = previewImage.GetComponentInChildren<Button>();
+
+                    if (previewButton != null)
+                    {
+                        HandlePreviewClick(previewButton);
+                    }
+                    else
+                    {
+                        Debug.LogError("Preview button not found.");
+                    }
+                }
+                else
+                {
+                    Debug.LogError("PreviewImage component not found.");
+                }
+            }
+            else
+            {
+                Debug.LogError("Canvas not found.");
+            }
+        }
     }
 
     void Update()
@@ -194,31 +225,58 @@ public class TestHome2 : MonoBehaviour
         }
     }
 
-    bool _previewing = false;
-    public void HandlePreviewClick(Button button)
+    private bool HasBackCamera()
+{
+    WebCamDevice[] devices = WebCamTexture.devices;
+    foreach (WebCamDevice device in devices)
     {
-        if (!_initialized) return;
-        var engine = IRtcEngine.GetEngine(AppID);
-        _previewing = !_previewing;
-        previewImage.GetComponent<VideoSurface>().SetEnable(_previewing);
-        if (_previewing)
+        if (!device.isFrontFacing)
         {
-            engine.EnableVideo();
-            engine.EnableVideoObserver();
-            engine.StartPreview();
-            button.GetComponentInChildren<Text>().text = "StopPreview";
+            return true; // At least one back camera is available
+        }
+    }
+    return false; // No back camera found
+}
 
-            // VideoManager only works after video enabled
-            CheckDevices(engine);
+
+    bool _previewing = false;
+bool _usingFrontCamera = true; // Add a variable to track the currently used camera
+
+public void HandlePreviewClick(Button button)
+{
+    if (!_initialized) return;
+    var engine = IRtcEngine.GetEngine(AppID);
+
+    if (!_previewing)
+    {
+        engine.EnableVideo();
+        engine.EnableVideoObserver();
+        engine.StartPreview();
+        _previewing = true;
+    }
+
+    if (HasBackCamera()) // Check if a back camera is available
+    {
+        if (_usingFrontCamera)
+        {
+            engine.SwitchCamera();
+            button.GetComponentInChildren<Text>().text = "Switch to Back Camera";
         }
         else
         {
-            engine.DisableVideo();
-            engine.DisableVideoObserver();
-            engine.StopPreview();
-            button.GetComponentInChildren<Text>().text = "StartPreview";
+            engine.SwitchCamera();
+            button.GetComponentInChildren<Text>().text = "Switch to Front Camera";
         }
+
+        _usingFrontCamera = !_usingFrontCamera; // Toggle the camera flag
     }
+    else
+    {
+        Debug.LogWarning("No back camera available on this device.");
+    }
+}
+
+
 
     public void OnViewControllerFinish()
     {

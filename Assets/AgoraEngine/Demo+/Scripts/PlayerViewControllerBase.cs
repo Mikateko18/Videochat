@@ -12,6 +12,8 @@ public class PlayerViewControllerBase : IVideoChatClient
     protected Dictionary<uint, VideoSurface> UserVideoDict = new Dictionary<uint, VideoSurface>();
     protected const string SelfVideoName = "MyView";
     protected string mChannel;
+    private VideoSurface remoteView;
+    private Image remoteVideoImage;
     //    string logFilepath =
     //#if UNITY_EDITOR
     //    Application.dataPath + "/testagora.log";
@@ -20,6 +22,9 @@ public class PlayerViewControllerBase : IVideoChatClient
     //#endif
     protected bool remoteUserJoined = false;
     protected bool _enforcing360p = false; // the local view of the remote user resolution
+    private bool isVideoPaused = false;
+
+     private bool isScreenSharing = false;
 
     public PlayerViewControllerBase()
     {
@@ -83,7 +88,9 @@ public class PlayerViewControllerBase : IVideoChatClient
     protected bool MicMuted { get; set; }
 
     protected virtual void SetupUI()
+
     {
+    
         GameObject go = GameObject.Find(SelfVideoName);
         if (go != null)
         {
@@ -91,6 +98,41 @@ public class PlayerViewControllerBase : IVideoChatClient
             go.AddComponent<UIElementDragger>();
         }
 
+         remoteVideoImage = GameObject.Find("RemoteVideoImage").GetComponent<Image>();
+        remoteVideoImage.enabled = false; // Initially, disable the image
+        
+         Button pauseButton = GameObject.Find("FreezeButton").GetComponent<Button>();
+    if (pauseButton != null)
+    {
+        pauseButton.onClick.AddListener(() =>
+{
+    ToggleVideoPause();
+});
+    }
+
+     Button shareScreenButton = GameObject.Find("ShareButton").GetComponent<Button>();
+        if (shareScreenButton != null)
+        {
+            shareScreenButton.onClick.AddListener(ToggleScreenSharing);
+        }
+
+        
+        Button switchCameraButton = GameObject.Find("Canvas/ButtonPanel/SwitchCameraButton").GetComponent<Button>();
+    if (switchCameraButton != null)
+    {
+        // Check if both front and back cameras are available
+        bool isFrontCameraAvailable = IsCameraAvailable(true);  // Front camera
+        bool isBackCameraAvailable = IsCameraAvailable(false);  // Back camera
+
+        // Enable or disable the button based on camera availability
+        switchCameraButton.interactable = isFrontCameraAvailable && isBackCameraAvailable;
+
+        // Set the button's gameObject to inactive if no back camera is available
+        switchCameraButton.gameObject.SetActive(isBackCameraAvailable);
+
+        // Add a listener to your SwitchCamera button
+        switchCameraButton.onClick.AddListener(SwitchCamera);
+    }
         Button button = GameObject.Find("LeaveButton").GetComponent<Button>();
         if (button != null)
         {
@@ -134,25 +176,21 @@ public class PlayerViewControllerBase : IVideoChatClient
     }
 
     protected virtual void OnVideoSizeChanged(uint uid, int width, int height, int rotation)
+{
+    Debug.LogWarningFormat("OnVideoSizeChanged width = {0} height = {1} for rotation:{2}", width, height, rotation);
+    if (UserVideoDict.ContainsKey(uid))
     {
-        Debug.LogWarningFormat("OnVideoSizeChanged width = {0} height = {1} for rotation:{2}", width, height, rotation);
-        if (UserVideoDict.ContainsKey(uid))
-        {
-            GameObject go = UserVideoDict[uid].gameObject;
-            Vector2 v2 = new Vector2(width, height);
-            RawImage image = go.GetComponent<RawImage>();
-            if (_enforcing360p)
-            {
-                v2 = AgoraUIUtils.GetScaledDimension(width, height, 360f);
-            }
-
-            if (IsPortraitOrientation(rotation))
-            {
-                v2 = new Vector2(v2.y, v2.x);
-            }
-            image.rectTransform.sizeDelta = v2;
-        }
+        GameObject go = UserVideoDict[uid].gameObject;
+        RawImage image = go.GetComponent<RawImage>();
+        
+        // Set a fixed size for the RawImage component
+        // Adjust the width and height according to your desired size
+        Vector2 fixedSize = new Vector2(200, 150); // Example size: 200x150
+        
+        image.rectTransform.sizeDelta = fixedSize;
     }
+}
+
 
     bool IsPortraitOrientation(int rotation)
     {
@@ -228,32 +266,30 @@ public class PlayerViewControllerBase : IVideoChatClient
 
     // When a remote user joined, this delegate will be called. Typically
     // create a GameObject to render video on it
-    protected virtual void OnUserJoined(uint uid, int elapsed)
+     protected virtual void OnUserJoined(uint uid, int elapsed)
+{
+    Debug.Log("User joined: " + uid);
+
+    if (remoteView == null)
     {
-        Debug.Log("onUserJoined: uid = " + uid + " elapsed = " + elapsed);
-
-        // find a game object to render video stream from 'uid'
-        GameObject go = GameObject.Find(uid.ToString());
-        if (!ReferenceEquals(go, null))
+        GameObject remoteViewObject = GameObject.Find("RemoteView");
+        if (remoteViewObject != null)
         {
-            return; // reuse
+            Debug.Log("Adding VideoSurface to RemoteView GameObject...");
+            remoteView = remoteViewObject.AddComponent<VideoSurface>();
         }
-
-        // create a GameObject and assign to this new user
-        VideoSurface videoSurface = makeImageSurface(uid.ToString());
-        if (!ReferenceEquals(videoSurface, null))
+        else
         {
-            // configure videoSurface
-            videoSurface.SetForUser(uid);
-            videoSurface.SetEnable(true);
-            videoSurface.SetVideoSurfaceType(AgoraVideoSurfaceType.RawImage);
-            videoSurface.SetGameFps(30);
-            videoSurface.EnableFilpTextureApply(enableFlipHorizontal: true, enableFlipVertical: false);
-            UserVideoDict[uid] = videoSurface;
-            Vector2 pos = AgoraUIUtils.GetRandomPosition(100);
-            videoSurface.transform.localPosition = new Vector3(pos.x, pos.y, 0);
+            Debug.LogError("RemoteView GameObject not found.");
         }
     }
+
+    remoteView?.SetForUser(uid);
+    remoteView?.SetEnable(true);
+    remoteView?.SetVideoSurfaceType(AgoraVideoSurfaceType.RawImage);
+    remoteView?.SetGameFps(30);
+    Debug.Log("RemoteView setup for user: " + uid);
+}
 
     // When remote user is offline, this delegate will be called. Typically
     // delete the GameObject for this user
@@ -269,6 +305,142 @@ public class PlayerViewControllerBase : IVideoChatClient
             GameObject.Destroy(surface.gameObject);
         }
     }
+
+  private bool IsCameraAvailable(bool isFrontCamera)
+{
+    WebCamDevice[] devices = WebCamTexture.devices;
+    foreach (WebCamDevice device in devices)
+    {
+        if (device.isFrontFacing == isFrontCamera)
+        {
+            // Camera of the specified position is available
+            return true;
+        }
+    }
+    // Camera of the specified position is not available
+    return false;
+}
+
+
+    // Add this function to the PlayerViewControllerBase class
+protected void SwitchCamera()
+{
+    if (mRtcEngine != null)
+    {
+        mRtcEngine.SwitchCamera(); // Toggle between front and back camera
+    }
+}
+
+public void ToggleVideoPause()
+{
+    isVideoPaused = !isVideoPaused;
+
+    if (mRtcEngine != null)
+    {
+        Debug.Log("ToggleVideoPause - isVideoPaused: " + isVideoPaused);
+
+        // Toggle video pause for all remote users
+        mRtcEngine.MuteAllRemoteVideoStreams(isVideoPaused);
+
+        Button pauseButton = GameObject.Find("FreezeButton").GetComponent<Button>();
+        if (pauseButton != null)
+        {
+            Text buttonText = pauseButton.GetComponentInChildren<Text>();
+            buttonText.text = isVideoPaused ? "Resume" : "Pause";
+        }
+
+        // Get a reference to the pop-up text element
+        Text popupText = GameObject.Find("PopupText").GetComponent<Text>();
+
+        if (isVideoPaused)
+        {
+            // Show the pop-up text when video is paused
+            popupText.text = "Video is Paused";
+            popupText.enabled = true;
+        }
+        else
+        {
+            // Hide the pop-up text when video is resumed
+            popupText.enabled = false;
+        }
+    }
+}
+
+
+void ToggleScreenSharing()
+    {
+        if (isScreenSharing)
+        {
+            mRtcEngine.StopScreenCapture();
+            isScreenSharing = false;
+
+            // Change the button text or perform any UI update as needed
+            Button shareScreenButton = GameObject.Find("ShareButton").GetComponent<Button>();
+            if (shareScreenButton != null)
+            {
+                Text buttonText = shareScreenButton.GetComponentInChildren<Text>();
+                buttonText.text = "Share Screen";
+            }
+        }
+        else
+        {
+            ShareDisplayScreen();
+            isScreenSharing = true;
+
+            // Change the button text or perform any UI update as needed
+            Button shareScreenButton = GameObject.Find("ShareButton").GetComponent<Button>();
+            if (shareScreenButton != null)
+            {
+                Text buttonText = shareScreenButton.GetComponentInChildren<Text>();
+                buttonText.text = "Stop Sharing";
+            }
+        }
+    }
+
+
+ void ShareDisplayScreen()
+    {
+        ScreenCaptureParameters sparams = new ScreenCaptureParameters
+        {
+            captureMouseCursor = true,
+            frameRate = 30
+        };
+
+        mRtcEngine.StopScreenCapture();
+
+        // Start sharing the display screen
+        mRtcEngine.StartScreenCaptureByDisplayId(GetDisplayId(), default(Rectangle), sparams);
+    }
+
+   uint GetDisplayId()
+{
+    uint displayId = 0;
+
+    // Platform-specific logic to get the display ID for screen sharing
+    // Implement this based on the target platform (Windows, macOS, etc.)
+
+    // Example for Windows:
+    #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+        // Retrieve the primary display ID for Windows
+        displayId = 0; // Set your logic to obtain the display ID
+    #endif
+
+    // Example for macOS:
+    #if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
+        List<uint> ids = AgoraNativeBridge.GetMacDisplayIds();
+        if (ids.Count > 0)
+        {
+            displayId = ids[0]; // Change logic here to get the desired display ID
+        }
+    #endif
+
+    // Add more platform-specific conditions and logic as needed for different platforms
+
+    return displayId;
+}
+
+
+
 
     protected VideoSurface makeImageSurface(string goName)
     {
@@ -303,3 +475,4 @@ public class PlayerViewControllerBase : IVideoChatClient
         return videoSurface;
     }
 }
+ 
